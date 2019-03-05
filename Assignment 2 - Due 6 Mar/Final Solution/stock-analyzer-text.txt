@@ -1,0 +1,421 @@
+   ' This macro expects a workbook with one or more worksheets
+    ' Each sheet should contain a table listing stock ticker symbols,
+    ' a date that can be translated into an ordered array of integers,
+    ' an opening price, a closing price, and a volume corresponding to the date,
+    ' along with any other columns you wish.
+    '
+    ' The table shoul be sorted by ticker symbols, but otherwise can be in any
+    ' order of rows and any arrangement of columns.
+    '
+    ' The table must contain a header row above the first row of numbers
+    ' (see the ReadMe or function code for how headers are parsed, but
+    ' most logical choices will work.  e.g. "ticker", "Date", "open", "closing", "vol")
+    ' using one header and one column per data entry.
+    '
+    ' You can include text comments on the sheet, but in order not to confuse
+    ' the parser, keep purely numeric cell entries that are comments to no more than 3 per row/
+    ' Also, in order to make sure calculations are valid, numeric entries found in rows with invalid
+    ' data in the data table may be irreversibly converted to text.  For this reason,
+    ' it is recommended that you not use this macro if you are mixing stock table data with other
+    ' numeric data that you want to do calculations with.
+    '
+    ' To the right of the data, results and a summary table will appear
+    ' These tables will appear on every sheet with readable data
+    ' just to the right of the first completely blank column
+    ' If no readable data is found on a sheet, no table will appear
+    '
+    ' This macro does not check time periods for consistency or missing data
+    ' In order to assess performance correctly, please make sure each sheet contains data for a
+    ' consistent time period (e.g. one calendar year per sheet)
+
+
+    Function Find_Header(SheetName As Worksheet) As Long
+    ' This function finds the header row based on the criterion that:
+    ' The header row is the row just above the first row with four or more numeric entries
+    '
+    ' Returns the row number as an integer
+    '
+    ' Setting this up as a while ... wend loop minimizes the search time without the
+    ' need to design a tricky way to break out of multiple nested for loops at once
+    
+        Dim Rows_In_Sheet As Long, RowNum As Long
+            'Rows_In_Sheet will hold the number of rows used in the sheet
+            'RowNum will hold the current row being searched
+        Dim Cols_In_Sheet As Integer, ColNum As Integer
+            'Cols_In_Sheet will hold the number of columns used in the sheet
+            'ColNum will hold the current column being searched
+        Dim Cols_with_Nums As Integer
+            'holds a running total of how many numeric columns have been encountered
+
+        
+        Find_Header = 0  '0 will be returned if no header is found
+        With SheetName
+            Rows_In_Sheet = .UsedRange.Rows.Count
+            Cols_In_Sheet = .UsedRange.Columns.Count
+                'Get the number of rows and columns, makes the code easier to read
+            RowNum = 1
+            ColNum = 1
+            Cols_with_Nums = 0
+            While (Cols_with_Nums < 4) And (RowNum <= Rows_In_Sheet)
+                'Set up search so that it terminates on finding 4 columns or runs out of rows
+                If IsNumeric("-" & .Cells(RowNum, ColNum)) Then
+                    'An odd feature of VBA is that empty cells return true for IsNumeric
+                    'the least obtrusive code that fixes it is to add a "-" sign to the front!
+                    Cols_with_Nums = Cols_with_Nums + 1          'count columns with numbers
+                End If
+                ColNum = ColNum + 1                              'move to next column
+                If ColNum > Cols_In_Sheet Then                   'move to next row
+                    ColNum = 1
+                    RowNum = RowNum + 1
+                    Cols_with_Nums = 0   'Reset the counter with each new row
+                End If
+            Wend
+                'Only change the default if Cols_with_Nums was 4 (checked robustly)
+            If Cols_with_Nums > 3 Then
+                Find_Header = RowNum - 1
+            End If
+            
+        End With
+
+    End Function
+    
+    Function Parse_Header(SheetName As Worksheet, RowNum As Long) As Integer()
+    ' This function will extract the location of the data columns needed
+    ' It will return an array, with the following labels:
+    ' Parse_Header(i) = Column_Type,
+    '   Value of i          Column_Type
+    '       1               Ticker Symbol
+    '       2               Date
+    '       3               Opening Price
+    '       4               Closing Price
+    '       5               Volume
+    '
+    ' The function reads from right to left, so that the first columns
+    ' having the appropriate label in the header row are selected.
+    ' The ReadMe file explains how header labels are identified.  In general:
+    ' everything in the cell that isn't a letter is ignored, case is ignored
+    ' and the first letters "tick", "sym", "date", "open", "clos", and "vol"
+    ' are what indicate a match, so "vol" works just as well as "<Volume of Trades>"
+    '
+        Dim Parse_Array(0 To 5) As Integer
+            'Dynamic array for holding function result
+        Dim Cols_In_Sheet As Integer
+            'Cols_In_Sheet stores the number of columns used in the sheet
+        Dim Label_Holder As String, Trimmed_Label As String
+            'Label_Holder will hold a cell's contents for trimming
+            'Trimmed_Label will hold the contents stripped to lowercase letters
+            
+        'Parse_Array will temporarily hold the results.  For readability, we'll skip zero
+        Parse_Array(1) = 0     '0 will indicate the header wasn't found
+        Parse_Array(2) = 0     'We store the ColNums as an array so we can return them easily
+        Parse_Array(3) = 0     'but in the main program we'll replace these with easily-read
+        Parse_Array(4) = 0     'variable names. Comments will track which is which for now.
+        Parse_Array(5) = 0
+
+        With SheetName
+            Cols_In_Sheet = .UsedRange.Columns.Count
+            For ColNum = Cols_In_Sheet To 1 Step -1
+                If Not (IsEmpty(.Cells(RowNum, ColNum))) Then 'Check only cells that aren't empty
+                    Label_Holder = .Cells(RowNum, ColNum)     'Get the cell contents
+                    Trimmed_Label = LCase(Label_Holder)       'Convert to lower case first ...
+                    For StrPos = 1 To Len(Trimmed_Label)      'Remove symmbols and nums 1 at a time
+                        If Mid(Trimmed_Label, StrPos, 1) Like "[!a-z]" Then
+                            Mid(Trimmed_Label, StrPos, 1) = " "  '... by first converting to spaces
+                       End If
+                    Next StrPos
+                    Trimmed_Label = Replace(Trimmed_Label, " ", "", 1, -1, 1) '...then removing spaces
+                    'This can be done cleanly only if the Regex tool is installed, so did it the hard way.
+                   
+                    'Now we parse out the labels ... a bit too irregular for a "case" statement
+                    If (Left(Trimmed_Label, 4) = "tick") Or (Left(Trimmed_Label, 3) = "sym") Then
+                        Parse_Array(1) = ColNum     '1 is for the ticker symbol
+                    ElseIf (Left(Trimmed_Label, 4)) = "date" Then
+                        Parse_Array(2) = ColNum     '2 is for the date
+                    ElseIf (Left(Trimmed_Label, 4)) = "open" Then
+                        Parse_Array(3) = ColNum      '3 is for the opening trade
+                    ElseIf (Left(Trimmed_Label, 4)) = "clos" Then
+                        Parse_Array(4) = ColNum      '4 is for the closing trade
+                    ElseIf (Left(Trimmed_Label, 3)) = "vol" Then
+                        Parse_Array(5) = ColNum      '5 is for volume
+                    'We will turn these into easily-read variable names in the main loop
+                    End If   'End check of label text
+                End If      'If cell was empty, move to next column right away
+            Next ColNum
+        End With
+       
+        Parse_Header = Parse_Array   'this is the output
+    
+    End Function
+                
+    
+    Function Validate_Row(SheetName As Worksheet, RowNum As Long, ColCodes As Variant) As Boolean
+    'This function will validate the content of a row as being suited for analysis.
+    'It takes the sheet name, row number, and column numbers (as an array) that it needs to check,
+    'then applies the following five checks for valididty.
+    'ColCodes(1)  (Ticker Symbol)   should not be empty
+    'ColCodes(2)  (Date)            should be a number or date format that can be read as a number
+    'ColCodes(3)  (Opening Price)   shoul be a positive number
+    'ColCodes(4)  (Closing Price)   should be a positive number
+    'ColCodes(5)  (Volume)          should be a positive number (can't enforce integer status due to value 
+range)
+    'In order for the row to be valid, all tests must pass
+    'Returns a simple True or False
+    
+        Dim ValidCheck(5) As Boolean
+        'To make the code easier to read, we'll temporarily store each check individually
+
+        With SheetName
+            ValidCheck(1) = Not (IsEmpty(.Cells(RowNum, ColCodes(1))))      'True if ticker isn't empty
+            ValidCheck(2) = IsNumeric("-" & .Cells(RowNum, ColCodes(2)))    'True is date is a number
+                'Actual date formats not supported, uses the leading "-" hack to fix VBA IsNumeric yields true 
+when empty issue
+            For i = 3 To 5                                                  'True if open, close, vol is a non-negative number
+                ValidCheck(i) = IsNumeric(.Cells(RowNum, ColCodes(i))) And .Cells(RowNum, ColCodes(i)) >= 0
+            Next i
+        End With
+        
+        ' Now do one big AND ... this could be a loop, but it's more explicit and easier to modify this way
+        Validate_Row = ValidCheck(1) And ValidCheck(2) And ValidCheck(3) And ValidCheck(4) And 
+ValidCheck(5)
+    
+    End Function
+
+Sub Stock_Analyze()
+    'Begin main loop
+    Dim Current_Sheet As Worksheet
+        'Loop counter for workbook
+    Dim Cell_Target As Range
+        'Loop counter for range
+    Dim Row_Index As Long
+        'Loop counter for row
+    Dim Column_Index As Integer
+        'Loop counter for columns
+    Dim Array_Index As Integer
+        'Loop counter for array
+    Dim Header_Row As Long, Ticker_Block_Start As Long, Ticker_Block_End As Long, Output_Row As 
+Long
+        'Location of header row, start and end rows of blocks with the same ticker symbol,
+        'and output row for the results table
+    Dim Last_Row As Long, Last_Column As Integer
+        'Stores last used row and column to minimize calls to .UsedRange
+    Dim Max_Row_Index As Long, Min_Row_Index As Long
+        'Index of maximum and minimum values, used multiple times for computation
+    Dim Max_Val As Double, Min_Val As Double, Start_Val As Double, End_Val As Double
+    Dim Change As Double, Percent_Change As Double, Total_Volume As Double
+        'Actual max, min, starting value, ending value, change, percent change, and total volume
+        'These values are calculated quantities used during analysis and reported in the Results Table
+        'Total volume can be a very large number, so use Double rather than Long
+    Dim Label_Array() As Integer
+        'Locations of column labels in array of numbers, for passing to / from functions
+    Dim Ticker_Col As Integer, Date_Col As Integer, Open_Col As Integer, Close_Col As Integer
+    Dim Vol_Col As Integer
+        'Nicer names for the column label locations to make the code easier to read
+    Dim Date_Range As Range, Vol_Range As Range, Summary_Search_Range_Ticker As Range
+    Dim Summary_Search_Range_Percent As Range, Summary_Search_Range_Vol As Range
+        'We will use these to store ranges for analysiis, will make the code easier to read
+    Dim Output_Column As Integer
+        'Tracker for where to put the output, either Results Table or Summary Table
+    Dim Current_Ticker As String
+        'The name of the current ticker symbol block being analyzed
+
+    
+    'The main loop goes through every sheet and
+    '  1) Finds the data it needs to do the analysis (see ReadMe for more info)
+    '  2) Creates a results table that lists all stocks, their yearly price change
+    '     in absolute and percentage terms, and total volume
+    '  3) Creates a summary table showing the individual stock with the
+    '     a) greatest percentage increase
+    '     b) greatest percentage decrease
+    '     c) highest volume
+    
+    For Each Current_Sheet In Worksheets
+        With Current_Sheet
+           
+            Header_Row = Find_Header(Current_Sheet)     'call the function to ID the header row
+            If Header_Row = 0 Then
+                MsgBox ("Header row not found in sheet" + .Name + "-- sheet skipped")
+                GoTo SkipSheet   'Easy to read and understand code > functional purity in this case
+            End If
+            
+            Label_Array = Parse_Header(Current_Sheet, Header_Row)  'now find the column to use
+            For Array_Index = 1 To 5
+                If Label_Array(Array_Index) = 0 Then
+                    MsgBox ("Complete set of column labels not found in sheet" + .Name + "-- sheet skipped")
+                    GoTo SkipSheet  'Easy to read and understand code > functional purity in this case
+                End If
+            Next Array_Index
+            
+            Ticker_Col = Label_Array(1)                 'for readability, we'll assign named labels
+            Date_Col = Label_Array(2)                   '1 = ticker, 2 = date, 3 = opening trade
+            Open_Col = Label_Array(3)                   '4 = closing trade, 5 = volume
+            Close_Col = Label_Array(4)
+            Vol_Col = Label_Array(5)
+            Last_Row = .UsedRange.Rows.Count            'calls to .UsedRange seem to slow down the macro a 
+lot
+            Last_Column = .UsedRange.Columns.Count      'so variables are used to minimize this
+            
+            Output_Row = 1                              'set where we want the table
+            Output_Column = Last_Column + 2             'leave one blank column
+            
+            Current_Ticker = ""                         'len(Current_Ticker) = 0 signals no valid rows found yet
+            
+            For Row_Index = Header_Row + 1 To Last_Row + 1
+                'Check every row below the header, including the first blank row in the sheet
+                'The blank last row will be the trigger that signals the writing of the last row of output data
+                If Validate_Row(Current_Sheet, Row_Index, Label_Array) = True Or Row_Index = Last_Row + 1 
+Then
+                'only do this if the row has valid data, or we've reached the last row, which will be blank
+                'We need to enter this branch on the last row to write the final entry in the data table
+                    If Output_Row = 1 Then
+                        'Put in the header on finding the first valid row, move the table pointer to row 2
+                        .Cells(1, Output_Column).Value = "Ticker"
+                        .Cells(1, Output_Column + 1).Value = "Change over Time Span"
+                        .Cells(1, Output_Column + 2).Value = "Percentage Change"
+                        .Cells(1, Output_Column + 3).Value = "Total Volume"
+                        Output_Row = 2
+                        '...and set up the first ticker block
+                        Current_Ticker = CStr(.Cells(Row_Index, Ticker_Col).Value)
+                        Ticker_Block_Start = Row_Index
+                        Ticker_Block_End = Row_Index
+                    ElseIf Current_Ticker <> CStr(.Cells(Row_Index, Ticker_Col).Value) Then
+                        'Triggered when we hit a new block that isn't the first valid row
+                        'Also triggered when we hit the final row
+                        
+                        'We will analyze, then write out data from the previous block
+                        .Cells(Output_Row, Output_Column).Value = Current_Ticker 'write ticker name
+                        'To compute the yearly change, we need to ...
+                        'First, define a date range for analysis (helps code readability)
+                        Set Date_Range = .Range(.Cells(Ticker_Block_Start, Date_Col), .Cells(Ticker_Block_End, 
+Date_Col))
+                        'Find the maximum date value in the block, function should ignore non-numeric data
+                        Max_Val = WorksheetFunction.Max(Date_Range)
+                        'Find the index of the row that has the first such value
+                        Max_Val_Index = WorksheetFunction.Match(Max_Val, Date_Range, 0)
+                        'Find the minimum date value in the block
+                        Min_Val = WorksheetFunction.Min(Date_Range)
+                        'Find the index of the row that has the first such value
+                        Min_Val_Index = WorksheetFunction.Match(Min_Val, Date_Range, 0)
+                        'Find the starting trade (opening value on the block row with the earliest date)
+                        Start_Val = .Cells(Ticker_Block_Start + Min_Val_Index - 1, Open_Col).Value
+                        'Find the ending trade (closing value on the block row with the latest date)
+                        End_Val = .Cells(Ticker_Block_Start + Max_Val_Index - 1, Close_Col).Value
+                        'Now compute the change
+                        Change = End_Val - Start_Val
+                        'Write the change value
+                        .Cells(Output_Row, Output_Column + 1).Value = Change
+                        'Color code the cell, green = positive change, red = negative change, gray = no change
+                        If Change > 0 Then
+                            .Cells(Output_Row, Output_Column + 1).Interior.Color = RGB(0, 192, 0)
+                        ElseIf Change < 0 Then
+                            .Cells(Output_Row, Output_Column + 1).Interior.Color = RGB(192, 0, 0)
+                        Else
+                            .Cells(Output_Row, Output_Column + 1).Interior.Color = RGB(192, 192, 192)
+                        End If
+                        'Compute the percent change, if the starting value = 0, then put n/a
+                        If (Start_Val) > 0 Then
+                            Percent_Change = Change / Start_Val
+                            'Write this value as a percentage
+                            .Cells(Output_Row, Output_Column + 2) = Format(Percent_Change, "Percent")
+                            'For the last item to report, first determine the range for analysis of volume
+                        Else
+                            .Cells(Output_Row, Output_Column + 2).Value = "n/a"
+                        End If
+                        Set Vol_Range = .Range(.Cells(Ticker_Block_Start, Vol_Col), .Cells(Ticker_Block_End, 
+Vol_Col))
+                        'Then compute the total volume by summing over the range, non-numeric data ignored
+                        Total_Volume = WorksheetFunction.Sum(Vol_Range)
+                        'Write this value to the Results Tabe
+                        .Cells(Output_Row, Output_Column + 3).Value = Total_Volume
+                        
+                        'Now update the Current-Ticker and Block
+                        Output_Row = Output_Row + 1
+                        Current_Ticker = CStr(.Cells(Row_Index, Ticker_Col).Value)
+                        Ticker_Block_Start = Row_Index
+                        Ticker_Block_End = Row_Index
+                        
+                    Else    'This is the case where data is valid but ticker didn't change
+                            'All we have to do here is expand the block range.  Use Row_Index
+                            'rather than just incrementing Ticker_Block_End, in case rows were skipped.
+                        Ticker_Block_End = Row_Index
+                        
+                    End If 'This ends what to do with rows containing valid data
+                    
+                Else    'Now handle the case where the row data is invalid.
+                    'Our biggest issue is numeric data in columns with an invalid entry
+                    'Speciically, if the trading volume is zero, then the date and prices should not be used
+                    'So we need to mark these cells in a way that will exlcude them from being used
+                    'Because we do not expect other calculations on the sheet, we won't worry abut undoing 
+these changes
+                    For Array_Index = 2 To 5
+                            .Cells(Row_Index, Label_Array(Array_Index)).NumberFormat = "@"
+                     Next Array_Index
+                End If  'This ends what to do with each row
+                
+            Next Row_Index
+             
+            If Output_Row > 1 Then
+                'Now write the Summary Table if there was at least one valid row of data
+                'Output_Row will be useful in this routine to locate the search ranges
+                Set Summary_Search_Range_Ticker = .Range(.Cells(2, Output_Column), .Cells(Output_Row, 
+Output_Column))
+                Set Summary_Search_Range_Percent = .Range(.Cells(2, Output_Column + 2), 
+.Cells(Output_Row, Output_Column + 2))
+                Set Summary_Search_Range_Vol = .Range(.Cells(2, Output_Column + 3), .Cells(Output_Row, 
+Output_Column + 3))
+                
+                'Reset Output_Column, with two blank spaces, no need to track rows
+                Output_Column = .UsedRange.Columns.Count + 3
+                
+                'Now output the table text
+                .Cells(1, Output_Column + 1).Value = "Ticker"
+                .Cells(1, Output_Column + 2).Value = "Value"
+                .Cells(2, Output_Column).Value = "Greatest % Increase"
+                .Cells(3, Output_Column).Value = "Greatest % Decrease"
+                .Cells(4, Output_Column).Value = "Greatest Total Volume"
+                
+                'Find the greatest increase
+                Max_Val = WorksheetFunction.Max(Summary_Search_Range_Percent)
+                If Max_Val > 0 Then   'Check that is really is an increase
+                    Max_Val_Index = WorksheetFunction.Match(Max_Val, Summary_Search_Range_Percent, 0)  
+'Identify the corresponding row
+                    'Uses the Index function to retrieve the ticker symbol in the corresponding row and write it
+                    .Cells(2, Output_Column + 1).Value = 
+WorksheetFunction.Index(Summary_Search_Range_Ticker, Max_Val_Index)
+                    .Cells(2, Output_Column + 2).Value = Format(Max_Val, "Percent")    'Write the maximum 
+value
+                Else
+                    .Cells(2, Output_Column + 1).Value = "No increases found!"
+                End If
+                
+                'Find the greatest decrease
+                Min_Val = WorksheetFunction.Min(Summary_Search_Range_Percent)
+                If Min_Val < 0 Then   'Check that is really is a decrease
+                    Min_Val_Index = WorksheetFunction.Match(Min_Val, Summary_Search_Range_Percent, 0)  
+'Identify the corresponding row
+                    'Uses the Index function to retrieve the ticker symbol in the corresponding row
+                    .Cells(3, Output_Column + 1).Value = 
+WorksheetFunction.Index(Summary_Search_Range_Ticker, Min_Val_Index)
+                    .Cells(3, Output_Column + 2).Value = Format(Min_Val, "Percent")   'Write the minimum value
+                Else
+                    .Cells(3, Output_Column + 1).Value = "No decreases found!"
+                End If
+                
+                'Find the greatest total volume
+                Max_Val = WorksheetFunction.Max(Summary_Search_Range_Vol)
+                Max_Val_Index = WorksheetFunction.Match(Max_Val, Summary_Search_Range_Vol, 0)  
+'Identify the corresponding row
+                'Uses the Index function to retrieve the ticker symbol in the corresponding row and write it
+                .Cells(4, Output_Column + 1).Value = 
+WorksheetFunction.Index(Summary_Search_Range_Ticker, Max_Val_Index)
+                .Cells(4, Output_Column + 2).Value = Max_Val    'Write the maximum value
+                
+             End If      'This ends what to do if one valid row is found
+     
+            ' If the process was short-circuited by GoTo, SkipSheet is the landing spot
+SkipSheet:                          'Before skipping to the next sheet, close out the With!
+        End With
+    Next Current_Sheet
+    
+End Sub
+
+
